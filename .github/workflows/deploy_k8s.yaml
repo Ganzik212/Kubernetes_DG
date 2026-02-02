@@ -1,0 +1,86 @@
+name: Deploy to Kubernetes
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:  # Pozwala na ręczne uruchomienie
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 1. Pobierz kod z repozytorium
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      # 2. Zaloguj się do Google Cloud
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_AUTH_KEY }}
+      
+      # 3. Skonfiguruj narzędzie gcloud
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.PROJECT_NAME }}
+      
+      # 4. Skonfiguruj Docker dla Artifact Registry
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ secrets.REPOSITORY_LOCATION }}-docker.pkg.dev --quiet
+      
+      # 5. Zbuduj obraz Docker
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ secrets.REPOSITORY_URL }}/uwb-app:latest .
+      
+      # 6. Wyślij obraz do Artifact Registry
+      - name: Push image to Artifact Registry
+        run: |
+          docker push ${{ secrets.REPOSITORY_URL }}/uwb-app:latest
+      
+      # 7. Przygotuj manifesty (zamień placeholder na prawdziwy URL)
+      - name: Prepare Kubernetes manifests
+        run: |
+          sed -i "s|REPOSITORY_URL|${{ secrets.REPOSITORY_URL }}|g" k8s/deployment.yaml
+      
+      # 8. Prześlij manifesty Kubernetes na VM
+      - name: Upload k8s manifests to VM
+        uses: appleboy/scp-action@v0.1.5
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
+          source: "k8s/*"
+          target: "~/app/k8s"
+      
+      # 9. Połącz się przez SSH i wdróż na Kubernetes
+      - name: SSH into VM and deploy to Kubernetes
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
+          script: |
+            export KUBECONFIG=/home/${{ secrets.SSH_USER }}/.kube/config
+            echo "=== Sprawdzam klaster ==="
+            kubectl cluster-info
+            kubectl get nodes
+            
+            echo "=== Wdrażam aplikację ==="
+            cd ~/app
+            kubectl apply -f k8s/deployment.yaml --validate=false
+            kubectl apply -f k8s/service.yaml --validate=false
+            
+            echo "=== Czekam na wdrożenie ==="
+            kubectl rollout status deployment/uwb-app --timeout=120s
+            
+            echo "=== Status wdrożenia ==="
+            kubectl get pods -l app=uwb-app
+            kubectl get svc uwb-app-service -o wide
+            
+            echo "=== Wdrożenie zakończone! ==="

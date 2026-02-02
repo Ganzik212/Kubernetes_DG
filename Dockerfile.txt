@@ -1,0 +1,13 @@
+# Używamy oficjalnego obrazu PHP z Apache
+FROM php:8.2-apache
+
+# Kopiujemy pliki aplikacji do katalogu serwera WWW
+COPY index.php /var/www/html/
+
+# Ustawiamy uprawnienia
+RUN chown -R www-data:www-data /var/www/html
+
+# Aplikacja będzie dostępna na porcie 80
+EXPOSE 80
+
+# Apache startuje automatycznie z obrazu bazowego
